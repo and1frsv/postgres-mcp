@@ -133,15 +133,28 @@ async def list_objects(
             rows = await SafeSqlDriver.execute_param_query(
                 sql_driver,
                 """
-                SELECT table_schema, table_name, table_type
-                FROM information_schema.tables
-                WHERE table_schema = {} AND table_type = {}
-                ORDER BY table_name
+                SELECT t.table_schema, t.table_name, t.table_type,
+                       obj_description(c.oid, 'pg_class') AS object_comment
+                FROM information_schema.tables t
+                LEFT JOIN pg_namespace n ON n.nspname = t.table_schema
+                LEFT JOIN pg_class c ON c.relname = t.table_name AND c.relnamespace = n.oid
+                WHERE t.table_schema = {} AND t.table_type = {}
+                ORDER BY t.table_name
                 """,
                 [schema_name, table_type],
             )
             objects = (
-                [{"schema": row.cells["table_schema"], "name": row.cells["table_name"], "type": row.cells["table_type"]} for row in rows]
+                [
+                    {
+                        "schema": row.cells["table_schema"],
+                        "name": row.cells["table_name"],
+                        "type": row.cells["table_type"],
+                        # Omitted entirely when the object carries no COMMENT, to keep
+                        # listings of undocumented schemas as compact as before.
+                        **({"comment": row.cells["object_comment"]} if row.cells.get("object_comment") else {}),
+                    }
+                    for row in rows
+                ]
                 if rows
                 else []
             )
@@ -208,10 +221,13 @@ async def get_object_details(
             col_rows = await SafeSqlDriver.execute_param_query(
                 sql_driver,
                 """
-                SELECT column_name, data_type, is_nullable, column_default
-                FROM information_schema.columns
-                WHERE table_schema = {} AND table_name = {}
-                ORDER BY ordinal_position
+                SELECT c.column_name, c.data_type, c.is_nullable, c.column_default,
+                       col_description(cl.oid, c.ordinal_position) AS column_comment
+                FROM information_schema.columns c
+                LEFT JOIN pg_namespace n ON n.nspname = c.table_schema
+                LEFT JOIN pg_class cl ON cl.relname = c.table_name AND cl.relnamespace = n.oid
+                WHERE c.table_schema = {} AND c.table_name = {}
+                ORDER BY c.ordinal_position
                 """,
                 [schema_name, object_name],
             )
@@ -222,12 +238,27 @@ async def get_object_details(
                         "data_type": r.cells["data_type"],
                         "is_nullable": r.cells["is_nullable"],
                         "default": r.cells["column_default"],
+                        **({"comment": r.cells["column_comment"]} if r.cells.get("column_comment") else {}),
                     }
                     for r in col_rows
                 ]
                 if col_rows
                 else []
             )
+
+            # Table/view comment: the cheapest documentation the database carries, and
+            # the thing that tells an agent what a column actually means.
+            comment_rows = await SafeSqlDriver.execute_param_query(
+                sql_driver,
+                """
+                SELECT obj_description(c.oid, 'pg_class') AS object_comment
+                FROM pg_class c
+                JOIN pg_namespace n ON n.oid = c.relnamespace
+                WHERE n.nspname = {} AND c.relname = {}
+                """,
+                [schema_name, object_name],
+            )
+            object_comment = comment_rows[0].cells["object_comment"] if comment_rows else None
 
             # Get constraints
             con_rows = await SafeSqlDriver.execute_param_query(
@@ -271,7 +302,12 @@ async def get_object_details(
             indexes = [{"name": r.cells["indexname"], "definition": r.cells["indexdef"]} for r in idx_rows] if idx_rows else []
 
             result = {
-                "basic": {"schema": schema_name, "name": object_name, "type": object_type},
+                "basic": {
+                    "schema": schema_name,
+                    "name": object_name,
+                    "type": object_type,
+                    **({"comment": object_comment} if object_comment else {}),
+                },
                 "columns": columns,
                 "constraints": constraints_list,
                 "indexes": indexes,

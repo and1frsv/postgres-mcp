@@ -309,6 +309,10 @@ class SafeSqlDriver(SqlDriver):
         "version",
         "unicode_version",
         "icu_unicode_version",
+        # Comment information functions
+        "col_description",
+        "obj_description",
+        "shobj_description",
         # Database object information functions
         "pg_column_size",
         "pg_column_compression",
