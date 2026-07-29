@@ -12,7 +12,7 @@ from typing import Literal
 from typing import Union
 
 import mcp.types as types
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 from mcp.types import ToolAnnotations
 from pydantic import Field
 from pydantic import validate_call
@@ -34,8 +34,8 @@ from .sql import check_hypopg_installation_status
 from .sql import obfuscate_password
 from .top_queries import TopQueriesCalc
 
-# Initialize FastMCP with default settings
-mcp = FastMCP("postgres-mcp")
+# Initialize MCPServer with default settings
+mcp = MCPServer("postgres-mcp")
 
 # Constants
 PG_STAT_STATEMENTS = "pg_stat_statements"
@@ -660,13 +660,12 @@ async def main():
     if args.transport == "stdio":
         await mcp.run_stdio_async()
     elif args.transport == "sse":
-        mcp.settings.host = args.sse_host
-        mcp.settings.port = args.sse_port
-        await mcp.run_sse_async()
+        await mcp.run_sse_async(host=args.sse_host, port=args.sse_port)
     elif args.transport == "streamable-http":
-        mcp.settings.host = args.streamable_http_host
-        mcp.settings.port = args.streamable_http_port
-        await mcp.run_streamable_http_async()
+        await mcp.run_streamable_http_async(
+            host=args.streamable_http_host,
+            port=args.streamable_http_port,
+        )
 
 
 async def shutdown(sig=None):

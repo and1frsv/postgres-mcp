@@ -48,7 +48,6 @@ async def test_transport_argument_parsing(transport):
 async def test_streamable_http_host_port_arguments():
     """Test that streamable-http host and port arguments are applied correctly."""
     from postgres_mcp.server import main
-    from postgres_mcp.server import mcp
 
     original_argv = sys.argv
     try:
@@ -62,13 +61,12 @@ async def test_streamable_http_host_port_arguments():
 
         with (
             patch("postgres_mcp.server.db_connection.pool_connect", AsyncMock()),
-            patch("postgres_mcp.server.mcp.run_streamable_http_async", AsyncMock()),
+            patch("postgres_mcp.server.mcp.run_streamable_http_async", AsyncMock()) as mock_http,
         ):
             await main()
 
-            # Verify the host and port were set correctly
-            assert mcp.settings.host == "0.0.0.0"
-            assert mcp.settings.port == 9000
+            # Verify the host and port were passed to the transport
+            mock_http.assert_awaited_once_with(host="0.0.0.0", port=9000)
     finally:
         sys.argv = original_argv
 
@@ -77,7 +75,6 @@ async def test_streamable_http_host_port_arguments():
 async def test_sse_host_port_arguments():
     """Test that SSE host and port arguments are applied correctly."""
     from postgres_mcp.server import main
-    from postgres_mcp.server import mcp
 
     original_argv = sys.argv
     try:
@@ -91,13 +88,12 @@ async def test_sse_host_port_arguments():
 
         with (
             patch("postgres_mcp.server.db_connection.pool_connect", AsyncMock()),
-            patch("postgres_mcp.server.mcp.run_sse_async", AsyncMock()),
+            patch("postgres_mcp.server.mcp.run_sse_async", AsyncMock()) as mock_sse,
         ):
             await main()
 
-            # Verify the host and port were set correctly
-            assert mcp.settings.host == "0.0.0.0"
-            assert mcp.settings.port == 8080
+            # Verify the host and port were passed to the transport
+            mock_sse.assert_awaited_once_with(host="0.0.0.0", port=8080)
     finally:
         sys.argv = original_argv
 
