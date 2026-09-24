@@ -204,6 +204,66 @@ async def test_pool_connect_not_initialized(mock_pool):
 
 
 @pytest.mark.asyncio
+async def test_pool_holds_no_idle_connections_and_checks_on_checkout(mock_pool):
+    """Idle MCP sessions must not pin server connections, and a connection the
+    server closed while idle (idle_session_timeout, proxy drop) must be replaced
+    on checkout instead of failing the next query."""
+    from psycopg_pool import AsyncConnectionPool
+
+    # stop right after construction: only the pool parameters are under test here
+    mock_pool.open.side_effect = Exception("stop after construction")
+    with patch("postgres_mcp.sql.sql_driver.AsyncConnectionPool", return_value=mock_pool) as pool_cls:
+        # the patch replaces the whole class; keep the real static check so the
+        # assertion below compares against psycopg_pool, not against the mock
+        pool_cls.check_connection = AsyncConnectionPool.check_connection
+        db_pool = DbConnPool("postgresql://user:pass@localhost/db")
+        with pytest.raises(ValueError):
+            await db_pool.pool_connect()
+
+    kwargs = pool_cls.call_args.kwargs
+    assert kwargs["min_size"] == 0
+    assert kwargs["check"] is AsyncConnectionPool.check_connection
+
+
+async def _pool_kwargs(mock_pool, url):
+    """Run the real pool_connect up to pool construction and return its kwargs."""
+    mock_pool.open.side_effect = Exception("stop after construction")
+    with patch("postgres_mcp.sql.sql_driver.AsyncConnectionPool", return_value=mock_pool) as pool_cls:
+        with pytest.raises(ValueError):
+            await DbConnPool(url).pool_connect()
+    return pool_cls.call_args.kwargs
+
+
+@pytest.mark.asyncio
+async def test_default_application_name_when_url_has_none(mock_pool, monkeypatch):
+    """Sessions of every MCP client must be identifiable in pg_stat_activity even
+    when the user's DATABASE_URI does not name the application."""
+    monkeypatch.delenv("PGAPPNAME", raising=False)
+    kwargs = await _pool_kwargs(mock_pool, "postgresql://user:pass@localhost/db")
+    assert kwargs["kwargs"]["application_name"] == "postgres-mcp"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "url,env",
+    [
+        ("postgresql://user:pass@localhost/db?application_name=pgmcp-ivanov", None),
+        ("host=localhost dbname=db user=u application_name=pgmcp-ivanov", None),
+        ("postgresql://user:pass@localhost/db", "pgmcp-from-env"),
+    ],
+)
+async def test_explicit_application_name_is_not_overridden(mock_pool, monkeypatch, url, env):
+    """An application_name the user set (URI, DSN or PGAPPNAME) wins over the default:
+    a pool-level kwarg would silently replace it."""
+    if env is None:
+        monkeypatch.delenv("PGAPPNAME", raising=False)
+    else:
+        monkeypatch.setenv("PGAPPNAME", env)
+    kwargs = await _pool_kwargs(mock_pool, url)
+    assert "application_name" not in (kwargs.get("kwargs") or {})
+
+
+@pytest.mark.asyncio
 async def test_connection_url_property():
     """Test connection_url property."""
     db_pool = DbConnPool("postgresql://user:pass@localhost/db")

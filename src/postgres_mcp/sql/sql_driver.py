@@ -1,6 +1,7 @@
 """SQL driver adapter for PostgreSQL connections."""
 
 import logging
+import os
 import re
 from dataclasses import dataclass
 from typing import Any
@@ -10,11 +11,26 @@ from typing import Optional
 from urllib.parse import urlparse
 from urllib.parse import urlunparse
 
+from psycopg.conninfo import conninfo_to_dict
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
 from typing_extensions import LiteralString
 
 logger = logging.getLogger(__name__)
+
+DEFAULT_APPLICATION_NAME = "postgres-mcp"
+
+
+def default_connect_kwargs(url: str) -> dict[str, str]:
+    """Connection kwargs that fill in what the user left unset.
+
+    application_name is added only when neither the connection string nor PGAPPNAME
+    names the application: psycopg lets explicit kwargs override the conninfo, so an
+    unconditional default would silently replace the user's own value.
+    """
+    if os.environ.get("PGAPPNAME") or conninfo_to_dict(url).get("application_name"):
+        return {}
+    return {"application_name": DEFAULT_APPLICATION_NAME}
 
 
 def obfuscate_password(text: str | None) -> str | None:
@@ -85,11 +101,17 @@ class DbConnPool:
         await self.close()
 
         try:
-            # Configure connection pool with appropriate settings
+            # Configure connection pool with appropriate settings.
+            # min_size=0: every open MCP client session runs its own pool, so an idle
+            # session must not pin a server connection; unused ones close after max_idle.
+            # check: a connection the server or a proxy closed while idle is replaced on
+            # checkout instead of failing the next query.
             self.pool = AsyncConnectionPool(
                 conninfo=url,
-                min_size=1,
+                min_size=0,
                 max_size=5,
+                check=AsyncConnectionPool.check_connection,
+                kwargs=default_connect_kwargs(url),
                 open=False,  # Don't connect immediately, let's do it explicitly
             )
 
