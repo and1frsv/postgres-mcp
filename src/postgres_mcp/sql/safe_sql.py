@@ -75,6 +75,7 @@ from pglast.ast import WindowDef
 from pglast.ast import WindowFunc
 from pglast.ast import WithClause
 from pglast.enums import A_Expr_Kind
+from psycopg.errors import QueryCanceled
 from psycopg.sql import SQL
 from psycopg.sql import Composable
 from psycopg.sql import Literal
@@ -869,6 +870,9 @@ class SafeSqlDriver(SqlDriver):
         "postgis_topology",
     }
 
+    # Seconds the client waits beyond the server-side statement_timeout before giving up.
+    CLIENT_TIMEOUT_GRACE: ClassVar[float] = 5.0
+
     def __init__(self, sql_driver: SqlDriver, timeout: float | None = None):
         """Initialize with an underlying SQL driver and optional timeout.
 
@@ -993,13 +997,16 @@ class SafeSqlDriver(SqlDriver):
         # NOTE: Always force readonly=True in SafeSqlDriver regardless of what was passed
         if self.timeout:
             try:
-                async with asyncio.timeout(self.timeout):
+                # The server-side statement_timeout fires first; the client guard only covers
+                # a stalled connection, hence the grace period.
+                async with asyncio.timeout(self.timeout + self.CLIENT_TIMEOUT_GRACE):
                     return await self.sql_driver.execute_query(
                         f"/* crystaldba */ {query}",
                         params=params,
                         force_readonly=True,
+                        statement_timeout=self.timeout,
                     )
-            except asyncio.TimeoutError as e:
+            except (asyncio.TimeoutError, QueryCanceled) as e:
                 logger.warning(f"Query execution timed out after {self.timeout} seconds: {query[:100]}...")
                 raise ValueError(
                     f"Query execution timed out after {self.timeout} seconds in restricted mode. "

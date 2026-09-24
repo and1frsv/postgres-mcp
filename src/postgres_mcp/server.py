@@ -56,6 +56,10 @@ class AccessMode(str, Enum):
 # Global variables
 db_connection = DbConnPool()
 current_access_mode = AccessMode.UNRESTRICTED
+# Restricted-mode query timeout in seconds (--query-timeout). Also enforced server-side via
+# SET LOCAL statement_timeout, so a query the client gave up on does not keep running.
+DEFAULT_QUERY_TIMEOUT = 30.0
+query_timeout = DEFAULT_QUERY_TIMEOUT
 shutdown_in_progress = False
 
 
@@ -65,7 +69,7 @@ async def get_sql_driver() -> Union[SqlDriver, SafeSqlDriver]:
 
     if current_access_mode == AccessMode.RESTRICTED:
         logger.debug("Using SafeSqlDriver with restrictions (RESTRICTED mode)")
-        return SafeSqlDriver(sql_driver=base_driver, timeout=30)  # 30 second timeout
+        return SafeSqlDriver(sql_driver=base_driver, timeout=query_timeout)
     else:
         logger.debug("Using unrestricted SqlDriver (UNRESTRICTED mode)")
         return base_driver
@@ -590,6 +594,16 @@ async def get_top_queries(
         return format_error_response(str(e))
 
 
+def _positive_seconds(value: str) -> float:
+    try:
+        seconds = float(value)
+    except ValueError as e:
+        raise argparse.ArgumentTypeError(f"not a number: {value!r}") from e
+    if seconds <= 0:
+        raise argparse.ArgumentTypeError(f"must be > 0, got {value!r}")
+    return seconds
+
+
 async def main():
     # Parse command line arguments
     parser = argparse.ArgumentParser(description="PostgreSQL MCP Server")
@@ -632,12 +646,19 @@ async def main():
         default=8000,
         help="Port for streamable HTTP server (default: 8000)",
     )
+    parser.add_argument(
+        "--query-timeout",
+        type=_positive_seconds,
+        default=DEFAULT_QUERY_TIMEOUT,
+        help=f"Restricted-mode query timeout in seconds, enforced via statement_timeout (default: {DEFAULT_QUERY_TIMEOUT:g})",
+    )
 
     args = parser.parse_args()
 
     # Store the access mode in the global variable
-    global current_access_mode
+    global current_access_mode, query_timeout
     current_access_mode = AccessMode(args.access_mode)
+    query_timeout = args.query_timeout
 
     # Add the query tool with a description and annotations appropriate to the access mode
     if current_access_mode == AccessMode.UNRESTRICTED:

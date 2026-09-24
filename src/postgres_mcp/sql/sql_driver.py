@@ -206,6 +206,7 @@ class SqlDriver:
         query: LiteralString,
         params: list[Any] | None = None,
         force_readonly: bool = False,
+        statement_timeout: float | None = None,
     ) -> Optional[List[RowResult]]:
         """
         Execute a query and return results.
@@ -214,6 +215,7 @@ class SqlDriver:
             query: SQL query to execute
             params: Query parameters
             force_readonly: Whether to enforce read-only mode
+            statement_timeout: Server-side timeout in seconds for the read-only transaction
 
         Returns:
             List of RowResult objects or None on error
@@ -229,10 +231,14 @@ class SqlDriver:
                 # For pools, get a connection from the pool
                 pool = await self.conn.pool_connect()
                 async with pool.connection() as connection:
-                    return await self._execute_with_connection(connection, query, params, force_readonly=force_readonly)
+                    return await self._execute_with_connection(
+                        connection, query, params, force_readonly=force_readonly, statement_timeout=statement_timeout
+                    )
             else:
                 # Direct connection approach
-                return await self._execute_with_connection(self.conn, query, params, force_readonly=force_readonly)
+                return await self._execute_with_connection(
+                    self.conn, query, params, force_readonly=force_readonly, statement_timeout=statement_timeout
+                )
         except Exception as e:
             # Mark pool as invalid if there was a connection issue
             if self.conn and self.is_pool:
@@ -243,7 +249,9 @@ class SqlDriver:
 
             raise e
 
-    async def _execute_with_connection(self, connection, query, params, force_readonly) -> Optional[List[RowResult]]:
+    async def _execute_with_connection(
+        self, connection, query, params, force_readonly, statement_timeout: float | None = None
+    ) -> Optional[List[RowResult]]:
         """Execute query with the given connection."""
         transaction_started = False
         try:
@@ -252,6 +260,9 @@ class SqlDriver:
                 if force_readonly:
                     await cursor.execute("BEGIN TRANSACTION READ ONLY")
                     transaction_started = True
+                    # SET LOCAL ends with the transaction, so pooled connections are not affected
+                    if statement_timeout:
+                        await cursor.execute(f"SET LOCAL statement_timeout = {int(statement_timeout * 1000)}")
 
                 if params:
                     await cursor.execute(query, params)
