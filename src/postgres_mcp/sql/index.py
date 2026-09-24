@@ -1,5 +1,11 @@
+import re
 from dataclasses import dataclass
 from typing import Any
+
+
+def _name_part(text: str) -> str:
+    """Reduce a table/column reference to a fragment usable inside an unquoted identifier."""
+    return re.sub(r"\W+", "_", text).rstrip("_")
 
 
 @dataclass(frozen=True)
@@ -24,25 +30,13 @@ class IndexDefinition:
 
     @property
     def name(self) -> str:
-        # Clean column names for use in index naming
-        # Replace special characters with underscores to avoid issues with
-        # functional expressions
-        cleaned_columns = []
-        for col in self.columns:
-            # Replace parentheses and other special characters with underscores
-            # This ensures expressions like LOWER(column_name) work in
-            # index names
-            cleaned_col = col.replace("(", "_").replace(")", "_").replace(" ", "_").replace(",", "_")
-            # Remove consecutive underscores
-            while "__" in cleaned_col:
-                cleaned_col = cleaned_col.replace("__", "_")
-            # Remove trailing underscores
-            cleaned_col = cleaned_col.rstrip("_")
-            cleaned_columns.append(cleaned_col)
-
-        column_part = "_".join(cleaned_columns)
+        # The name is an unquoted identifier, so every part must be reduced to letters,
+        # digits and underscores: expressions like LOWER(column_name), schema-qualified
+        # tables ("silver.orders") and quoted names ('"Артикул"') would otherwise leak
+        # '(', '.', '"' into it and make the whole CREATE INDEX a syntax error.
+        column_part = "_".join(_name_part(col) for col in self.columns)
         suffix = "" if self.using == "btree" else f"_{self.using}"
-        base = f"crystaldba_idx_{self.table}_{column_part}_{len(self.columns)}"
+        base = f"crystaldba_idx_{_name_part(self.table)}_{column_part}_{len(self.columns)}"
         return f"{base}{suffix}"
 
     def __str__(self) -> str:
